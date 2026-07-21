@@ -1,0 +1,4 @@
+# This repo builds a Linux container image — keep LF in the repo regardless of
+# the checkout platform, so nothing ends up with CRLF inside the image.
+* text=auto eol=lf
+*.png binary

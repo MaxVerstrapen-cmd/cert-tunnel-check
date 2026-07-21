@@ -1,0 +1,9 @@
+{
+  "name": "cert-tunnel-check",
+  "version": "0.1.0",
+  "description": "Monitors cert expiry, HTTP reachability, and Cloudflare Tunnel health for self-hosted services",
+  "main": "check.js",
+  "scripts": {
+    "start": "node check.js"
+  }
+}

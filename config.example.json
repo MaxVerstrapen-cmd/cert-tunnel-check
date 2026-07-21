@@ -1,0 +1,23 @@
+{
+  "hostnames": [
+    "vaultwarden.example.com",
+    "auth.example.com"
+  ],
+  "cloudflare": {
+    "enabled": false,
+    "tunnelId": "REPLACE_WITH_TUNNEL_ID",
+    "accountId": "REPLACE_WITH_ACCOUNT_ID",
+    "apiToken": "REPLACE_WITH_API_TOKEN"
+  },
+  "certThresholds": {
+    "warnDays": 30,
+    "criticalDays": 14,
+    "urgentDays": 7
+  },
+  "discord": {
+    "webhookUrl": "REPLACE_WITH_DISCORD_WEBHOOK_URL"
+  },
+  "httpCheck": {
+    "timeoutMs": 8000
+  }
+}

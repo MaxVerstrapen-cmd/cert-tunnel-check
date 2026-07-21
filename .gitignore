@@ -1,0 +1,8 @@
+# Holds the Cloudflare API token and Discord webhook — never commit it.
+# Commit config.example.json instead.
+config.json
+
+# Runtime output
+state.json
+
+node_modules/
