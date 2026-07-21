@@ -4,7 +4,7 @@ services:
   cert-tunnel-check:
     # Bump this tag manually to update (no Watchtower — this tool is what alerts
     # when other things break, so it shouldn't update itself unattended).
-    image: ghcr.io/maxverstrapen-cmd/cert-tunnel-check:v1.1
+    image: ghcr.io/maxverstrapen-cmd/cert-tunnel-check:v1.2
     container_name: cert-tunnel-check
     restart: unless-stopped
     environment:
