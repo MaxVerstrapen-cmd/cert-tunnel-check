@@ -67,7 +67,7 @@ visibly stops.
 ### 3. Install in CasaOS
 
 CasaOS → **+** → **Custom Install** → **Import** (the `⋯` menu) → paste the
-contents of `docker-compose.yml`, replacing `YOUR_GITHUB_USERNAME` with yours.
+contents of `docker-compose.yml`.
 
 It's a headless app — no web UI. Verify it's working from the container logs;
 you should see a `=== cert-tunnel-check run @ ... ===` block.
