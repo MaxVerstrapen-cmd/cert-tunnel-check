@@ -84,7 +84,9 @@ contents of `docker-compose.yml`.
 
 Verify it's working from the container logs — you should see a
 `=== cert-tunnel-check run @ ... ===` block — then open
-`http://<casaos-host>:8080/` for the status dashboard.
+`http://<casaos-host>:8081/` for the status dashboard (host port set in the
+compose file's `ports:` line — the container itself always listens on 8080
+internally, so change the left side of `8081:8080` if that also collides).
 
 ### 4. Updating
 

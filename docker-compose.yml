@@ -14,9 +14,9 @@ services:
       STATE_PATH: /state/state.json
       PORT: "8080"
     ports:
-      # host:container — status dashboard. Change the host side if 8080
-      # already used elsewhere; the container side must stay 8080.
-      - "8080:8080"
+      # host:container — status dashboard. Host side (left) is free to change;
+      # the container side (right) must stay 8080, matching PORT above.
+      - "8081:8080"
     volumes:
       # config.json lives here — edit it on the host, restart to pick up changes.
       - /DATA/AppData/cert-tunnel-check/config:/config
