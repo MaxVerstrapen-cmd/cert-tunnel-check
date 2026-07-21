@@ -193,68 +193,111 @@ function certAlertLevel(daysRemaining, thresholds) {
 
 const dashboard = { lastRunAt: null, lastError: null, state: null };
 
+// Severity ranking, worst-wins — used both for individual badges and for
+// rolling everything up into the one headline status pill.
+const LEVEL_RANK = { ok: 0, unknown: 0, warn: 1, critical: 2, urgent: 3 };
+const LEVEL_LABEL = { ok: "Operational", warn: "Degraded", critical: "Degraded", urgent: "Issues detected" };
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
 
-function badge(level, text) {
-  const colors = {
-    ok: "#1a7f37", warn: "#9a6700", critical: "#bc4c00",
-    urgent: "#cf222e", unknown: "#6e7781",
-  };
-  const color = colors[level] || colors.unknown;
-  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;background:${color}">${escapeHtml(text)}</span>`;
+function pill(level, text) {
+  const cls = LEVEL_RANK[level] === undefined ? "unknown" : level;
+  return `<span class="pill pill-${cls}"><span class="dot"></span>${escapeHtml(text)}</span>`;
 }
 
-function renderTunnelRow(tunnel) {
+function renderTunnelCard(tunnel) {
   if (!tunnel) return "";
   if (tunnel.stubbed) {
-    return `<tr><td colspan="2">Cloudflare Tunnel</td><td>${badge("unknown", "not configured")}</td><td>${escapeHtml(tunnel.message || "")}</td></tr>`;
+    return `<div class="card">
+      <div class="card-head">
+        <span class="card-title">☁️ Cloudflare Tunnel</span>
+        ${pill("unknown", "Not configured")}
+      </div>
+      <div class="row"><span class="detail">${escapeHtml(tunnel.message || "")}</span></div>
+    </div>`;
   }
   const level = tunnel.ok ? "ok" : "urgent";
   const detail = tunnel.ok ? tunnel.status : tunnel.error || tunnel.status;
-  return `<tr><td colspan="2">Cloudflare Tunnel</td><td>${badge(level, tunnel.ok ? "healthy" : "unhealthy")}</td><td>${escapeHtml(detail || "")}</td></tr>`;
+  return `<div class="card">
+    <div class="card-head">
+      <span class="card-title">☁️ Cloudflare Tunnel</span>
+      ${pill(level, tunnel.ok ? "Healthy" : "Unhealthy")}
+    </div>
+    <div class="row"><span class="detail">${escapeHtml(detail || "")}</span></div>
+  </div>`;
 }
 
-function renderHostRow(hostname, hostState, thresholds) {
+function renderHostCard(hostname, hostState, thresholds) {
   const cert = hostState.cert || {};
   const reach = hostState.reach || {};
 
-  let certBadge, certDetail;
+  let certLevel, certPill, certDetail;
   if (cert.ok) {
-    const level = certAlertLevel(cert.daysRemaining, thresholds);
-    certBadge = badge(level, `${cert.daysRemaining}d`);
-    certDetail = cert.authorized ? escapeHtml(cert.issuer || "") : `untrusted chain (${escapeHtml(cert.authorizationError || "")})`;
+    certLevel = certAlertLevel(cert.daysRemaining, thresholds);
+    certPill = pill(certLevel, `${cert.daysRemaining}d remaining`);
+    certDetail = cert.authorized
+      ? escapeHtml(cert.issuer || "")
+      : `Untrusted chain (${escapeHtml(cert.authorizationError || "")})`;
   } else {
-    certBadge = badge("urgent", "error");
+    certLevel = "urgent";
+    certPill = pill("urgent", "Error");
     certDetail = escapeHtml(cert.error || "unknown error");
   }
 
-  let reachBadge, reachDetail;
+  let reachLevel, reachPill, reachDetail;
   if (reach.ok) {
-    reachBadge = badge("ok", String(reach.statusCode));
-    reachDetail = `${reach.responseTimeMs}ms`;
+    reachLevel = "ok";
+    reachPill = pill("ok", `HTTP ${reach.statusCode}`);
+    reachDetail = `${reach.responseTimeMs}ms response time`;
   } else {
-    reachBadge = badge("urgent", "down");
+    reachLevel = "urgent";
+    reachPill = pill("urgent", "Unreachable");
     reachDetail = escapeHtml(reach.error || "unknown error");
   }
 
-  return `<tr>
-    <td>${escapeHtml(hostname)}</td>
-    <td>${certBadge}<div class="detail">${certDetail}</div></td>
-    <td>${reachBadge}<div class="detail">${reachDetail}</div></td>
-    <td></td>
-  </tr>`;
+  return `<div class="card">
+    <div class="card-head">
+      <span class="card-title">🌐 ${escapeHtml(hostname)}</span>
+    </div>
+    <div class="row">
+      <span class="label">Certificate</span>
+      ${certPill}
+    </div>
+    <div class="row detail-row"><span class="detail">${certDetail}</span></div>
+    <div class="row">
+      <span class="label">Reachability</span>
+      ${reachPill}
+    </div>
+    <div class="row detail-row"><span class="detail">${reachDetail}</span></div>
+  </div>`;
 }
 
 function renderDashboard() {
   const config = loadJson(CONFIG_PATH, { hostnames: [], certThresholds: { warnDays: 30, criticalDays: 14, urgentDays: 7 } });
   const state = dashboard.state || { hosts: {}, tunnel: null };
-  const hostRows = Object.keys(state.hosts || {})
-    .map((h) => renderHostRow(h, state.hosts[h], config.certThresholds))
-    .join("\n");
+  const hostnames = Object.keys(state.hosts || {});
+
+  // Worst level across everything, for the headline pill. A stubbed tunnel
+  // check doesn't count against overall health — it's not configured yet,
+  // not broken.
+  let overall = "ok";
+  const bump = (level) => {
+    if (LEVEL_RANK[level] > LEVEL_RANK[overall]) overall = level;
+  };
+  if (state.tunnel && !state.tunnel.stubbed) bump(state.tunnel.ok ? "ok" : "urgent");
+  for (const h of hostnames) {
+    const { cert, reach } = state.hosts[h];
+    bump(cert && cert.ok ? certAlertLevel(cert.daysRemaining, config.certThresholds) : "urgent");
+    bump(reach && reach.ok ? "ok" : "urgent");
+  }
+
+  const hostCards = hostnames.map((h) => renderHostCard(h, state.hosts[h], config.certThresholds)).join("\n");
+  const tunnelCard = renderTunnelCard(state.tunnel);
+  const hasData = dashboard.lastRunAt !== null;
 
   return `<!doctype html>
 <html>
@@ -262,33 +305,101 @@ function renderDashboard() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="30">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
 <title>cert-tunnel-check</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #f6f8fa; color: #1f2328; margin: 0; padding: 24px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .meta { color: #57606a; font-size: 13px; margin-bottom: 20px; }
-  table { border-collapse: collapse; width: 100%; max-width: 900px; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; }
-  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #d0d7de; vertical-align: top; }
-  th { background: #f6f8fa; font-size: 12px; text-transform: uppercase; color: #57606a; }
-  tr:last-child td { border-bottom: none; }
-  .detail { color: #57606a; font-size: 12px; margin-top: 4px; }
-  .error { color: #cf222e; }
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --border: #e3e6ea;
+    --text: #14171f; --text-muted: #6b7280;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 6px rgba(16,24,40,.04);
+    --ok-bg: #e6f7ec; --ok-fg: #0f7a3d; --ok-dot: #22c55e;
+    --warn-bg: #fff5df; --warn-fg: #8a5b00; --warn-dot: #f5a524;
+    --critical-bg: #ffece0; --critical-fg: #9a3d00; --critical-dot: #f97316;
+    --urgent-bg: #fdeaea; --urgent-fg: #b3261e; --urgent-dot: #ef4444;
+    --unknown-bg: #eef0f3; --unknown-fg: #5b6270; --unknown-dot: #9aa1ac;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #2d333b;
+      --text: #e6edf3; --text-muted: #8b949e;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+      --ok-bg: rgba(34,197,94,.14); --ok-fg: #4ade80;
+      --warn-bg: rgba(245,165,36,.14); --warn-fg: #fbbf24;
+      --critical-bg: rgba(249,115,22,.14); --critical-fg: #fb923c;
+      --urgent-bg: rgba(239,68,68,.16); --urgent-fg: #f87171;
+      --unknown-bg: rgba(154,161,172,.14); --unknown-fg: #9aa1ac;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text);
+    margin: 0; padding: 32px 24px 48px;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    flex-wrap: wrap; gap: 16px; margin-bottom: 28px;
+  }
+  h1 { font-size: 21px; font-weight: 700; letter-spacing: -.01em; margin: 0; }
+  .subtitle { color: var(--text-muted); font-size: 13px; margin-top: 5px; }
+  .headline-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border-radius: 999px; font-size: 14px; font-weight: 600;
+    background: var(--${overall}-bg); color: var(--${overall}-fg);
+  }
+  .headline-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-title { font-size: 14px; font-weight: 600; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .detail-row { padding-top: 0; padding-bottom: 9px; border-top: none !important; }
+  .label { color: var(--text-muted); font-size: 13px; }
+  .detail { color: var(--text-muted); font-size: 12px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill-ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .pill-warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .pill-critical { background: var(--critical-bg); color: var(--critical-fg); }
+  .pill-urgent { background: var(--urgent-bg); color: var(--urgent-fg); }
+  .pill-unknown { background: var(--unknown-bg); color: var(--unknown-fg); }
+  .empty {
+    color: var(--text-muted); font-size: 14px; text-align: center;
+    padding: 48px 20px; border: 1px dashed var(--border); border-radius: 14px;
+  }
+  footer { color: var(--text-muted); font-size: 12px; margin-top: 28px; }
+  .error-banner {
+    background: var(--urgent-bg); color: var(--urgent-fg);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 20px;
+  }
 </style>
 </head>
 <body>
-<h1>cert-tunnel-check</h1>
-<div class="meta">
-  Last run: ${dashboard.lastRunAt ? escapeHtml(dashboard.lastRunAt.toISOString()) : "never"}
-  ${dashboard.lastError ? `<span class="error"> — last run failed: ${escapeHtml(dashboard.lastError)}</span>` : ""}
-  · refreshes every 30s
+<div class="wrap">
+<header>
+  <div>
+    <h1>cert-tunnel-check</h1>
+    <div class="subtitle">TLS, reachability &amp; tunnel monitoring</div>
+  </div>
+  ${hasData ? `<span class="headline-pill"><span class="dot"></span>${LEVEL_LABEL[overall]}</span>` : ""}
+</header>
+${dashboard.lastError ? `<div class="error-banner">Last run failed: ${escapeHtml(dashboard.lastError)}</div>` : ""}
+${hasData
+  ? `<div class="grid">\n${tunnelCard}\n${hostCards}\n</div>`
+  : `<div class="empty">No data yet — waiting on the first check to complete.</div>`}
+<footer>
+  Last run: ${dashboard.lastRunAt ? escapeHtml(dashboard.lastRunAt.toISOString()) : "never"} ·
+  next check ~every ${INTERVAL_MINUTES}m · page refreshes every 30s
+</footer>
 </div>
-<table>
-<thead><tr><th>Host</th><th>Cert</th><th>HTTP</th><th></th></tr></thead>
-<tbody>
-${renderTunnelRow(state.tunnel)}
-${hostRows || '<tr><td colspan="4">No data yet — waiting on first run.</td></tr>'}
-</tbody>
-</table>
 </body>
 </html>`;
 }
