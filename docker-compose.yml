@@ -4,7 +4,7 @@ services:
   cert-tunnel-check:
     # Bump this tag manually to update (no Watchtower — this tool is what alerts
     # when other things break, so it shouldn't update itself unattended).
-    image: ghcr.io/maxverstrapen-cmd/cert-tunnel-check:v1.0
+    image: ghcr.io/maxverstrapen-cmd/cert-tunnel-check:v1.1
     container_name: cert-tunnel-check
     restart: unless-stopped
     environment:
@@ -12,6 +12,11 @@ services:
       INTERVAL_MINUTES: "360"
       CONFIG_PATH: /config/config.json
       STATE_PATH: /state/state.json
+      PORT: "8080"
+    ports:
+      # host:container — status dashboard. Change the host side if 8080
+      # already used elsewhere; the container side must stay 8080.
+      - "8080:8080"
     volumes:
       # config.json lives here — edit it on the host, restart to pick up changes.
       - /DATA/AppData/cert-tunnel-check/config:/config
@@ -22,6 +27,10 @@ services:
         - container: INTERVAL_MINUTES
           description:
             en_us: Minutes between checks (360 = every 6 hours).
+      ports:
+        - container: "8080"
+          description:
+            en_us: Status dashboard — shows cert/HTTP/tunnel health.
       volumes:
         - container: /config
           description:
@@ -41,7 +50,7 @@ x-casaos:
   hostname: ""
   icon: https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/cloudflare-zero-trust.png
   index: /
-  port_map: ""
+  port_map: "8080"
   scheme: http
   title:
     en_us: Cert & Tunnel Check
@@ -51,8 +60,8 @@ x-casaos:
     en_us: >-
       Monitors TLS certificate expiry, HTTP reachability, and Cloudflare Tunnel
       connector health for self-hosted services. Alerts to a Discord webhook only
-      when something changes state, so it stays quiet until it matters. Headless —
-      no web UI; check the container logs to see run output.
+      when something changes state, so it stays quiet until it matters. Includes
+      a read-only status dashboard on port 8080.
   tips:
     before_install:
       en_us: >-

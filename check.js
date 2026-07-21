@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const tls = require("tls");
 const https = require("https");
+const http = require("http");
 
 // Paths are overridable so the container can mount config/state on volumes.
 const CONFIG_PATH = process.env.CONFIG_PATH || path.join(__dirname, "config.json");
@@ -12,6 +13,9 @@ const STATE_PATH = process.env.STATE_PATH || path.join(__dirname, "state.json");
 // Scheduling: loop inside the container by default, one-shot for local testing.
 const RUN_ONCE = process.env.RUN_ONCE === "true" || process.argv.includes("--once");
 const INTERVAL_MINUTES = Number(process.env.INTERVAL_MINUTES || 360);
+
+// Dashboard: serves the latest result as a web page instead of only console logs.
+const PORT = Number(process.env.PORT || 8080);
 
 // ---------- Utilities ----------
 
@@ -182,6 +186,136 @@ function certAlertLevel(daysRemaining, thresholds) {
   return "ok";
 }
 
+// ---------- Dashboard ----------
+// In-memory snapshot of the last run, served as a web page. Not persisted
+// separately from state.json — this is just state.json plus run metadata,
+// rendered for humans instead of `docker logs`.
+
+const dashboard = { lastRunAt: null, lastError: null, state: null };
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function badge(level, text) {
+  const colors = {
+    ok: "#1a7f37", warn: "#9a6700", critical: "#bc4c00",
+    urgent: "#cf222e", unknown: "#6e7781",
+  };
+  const color = colors[level] || colors.unknown;
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;color:#fff;background:${color}">${escapeHtml(text)}</span>`;
+}
+
+function renderTunnelRow(tunnel) {
+  if (!tunnel) return "";
+  if (tunnel.stubbed) {
+    return `<tr><td colspan="2">Cloudflare Tunnel</td><td>${badge("unknown", "not configured")}</td><td>${escapeHtml(tunnel.message || "")}</td></tr>`;
+  }
+  const level = tunnel.ok ? "ok" : "urgent";
+  const detail = tunnel.ok ? tunnel.status : tunnel.error || tunnel.status;
+  return `<tr><td colspan="2">Cloudflare Tunnel</td><td>${badge(level, tunnel.ok ? "healthy" : "unhealthy")}</td><td>${escapeHtml(detail || "")}</td></tr>`;
+}
+
+function renderHostRow(hostname, hostState, thresholds) {
+  const cert = hostState.cert || {};
+  const reach = hostState.reach || {};
+
+  let certBadge, certDetail;
+  if (cert.ok) {
+    const level = certAlertLevel(cert.daysRemaining, thresholds);
+    certBadge = badge(level, `${cert.daysRemaining}d`);
+    certDetail = cert.authorized ? escapeHtml(cert.issuer || "") : `untrusted chain (${escapeHtml(cert.authorizationError || "")})`;
+  } else {
+    certBadge = badge("urgent", "error");
+    certDetail = escapeHtml(cert.error || "unknown error");
+  }
+
+  let reachBadge, reachDetail;
+  if (reach.ok) {
+    reachBadge = badge("ok", String(reach.statusCode));
+    reachDetail = `${reach.responseTimeMs}ms`;
+  } else {
+    reachBadge = badge("urgent", "down");
+    reachDetail = escapeHtml(reach.error || "unknown error");
+  }
+
+  return `<tr>
+    <td>${escapeHtml(hostname)}</td>
+    <td>${certBadge}<div class="detail">${certDetail}</div></td>
+    <td>${reachBadge}<div class="detail">${reachDetail}</div></td>
+    <td></td>
+  </tr>`;
+}
+
+function renderDashboard() {
+  const config = loadJson(CONFIG_PATH, { hostnames: [], certThresholds: { warnDays: 30, criticalDays: 14, urgentDays: 7 } });
+  const state = dashboard.state || { hosts: {}, tunnel: null };
+  const hostRows = Object.keys(state.hosts || {})
+    .map((h) => renderHostRow(h, state.hosts[h], config.certThresholds))
+    .join("\n");
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
+<title>cert-tunnel-check</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background: #f6f8fa; color: #1f2328; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .meta { color: #57606a; font-size: 13px; margin-bottom: 20px; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #d0d7de; vertical-align: top; }
+  th { background: #f6f8fa; font-size: 12px; text-transform: uppercase; color: #57606a; }
+  tr:last-child td { border-bottom: none; }
+  .detail { color: #57606a; font-size: 12px; margin-top: 4px; }
+  .error { color: #cf222e; }
+</style>
+</head>
+<body>
+<h1>cert-tunnel-check</h1>
+<div class="meta">
+  Last run: ${dashboard.lastRunAt ? escapeHtml(dashboard.lastRunAt.toISOString()) : "never"}
+  ${dashboard.lastError ? `<span class="error"> — last run failed: ${escapeHtml(dashboard.lastError)}</span>` : ""}
+  · refreshes every 30s
+</div>
+<table>
+<thead><tr><th>Host</th><th>Cert</th><th>HTTP</th><th></th></tr></thead>
+<tbody>
+${renderTunnelRow(state.tunnel)}
+${hostRows || '<tr><td colspan="4">No data yet — waiting on first run.</td></tr>'}
+</tbody>
+</table>
+</body>
+</html>`;
+}
+
+function startDashboardServer() {
+  const server = http.createServer((req, res) => {
+    if (req.method !== "GET") {
+      res.writeHead(405).end();
+      return;
+    }
+    const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderDashboard());
+    } else if (url.pathname === "/api/state") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(dashboard));
+    } else if (url.pathname === "/healthz") {
+      res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
+    } else {
+      res.writeHead(404).end("Not found");
+    }
+  });
+  server.listen(PORT, () => console.log(`Dashboard listening on :${PORT}`));
+  return server;
+}
+
 // ---------- Main ----------
 
 async function main() {
@@ -245,6 +379,9 @@ async function main() {
   }
 
   saveState(newState);
+  dashboard.state = newState;
+  dashboard.lastRunAt = new Date();
+  dashboard.lastError = null;
 
   if (alerts.length > 0) {
     const message = `**Cert/Tunnel Check Alert** (${new Date().toISOString()})\n` + alerts.join("\n");
@@ -277,6 +414,12 @@ async function run() {
   // silence — fail loudly on startup so the container visibly stops.
   loadJson(CONFIG_PATH);
 
+  // Seed the dashboard with the last saved run so the page isn't blank
+  // immediately after a restart, before the first new check completes.
+  dashboard.state = loadJson(STATE_PATH, null);
+
+  startDashboardServer();
+
   console.log(`Scheduler: running every ${INTERVAL_MINUTES} minutes.`);
   for (;;) {
     // A single failed run shouldn't kill the container — log and wait it out.
@@ -284,6 +427,7 @@ async function run() {
       await main();
     } catch (err) {
       console.error("Run failed:", err.message);
+      dashboard.lastError = err.message;
     }
     await sleep(INTERVAL_MINUTES * 60 * 1000);
   }

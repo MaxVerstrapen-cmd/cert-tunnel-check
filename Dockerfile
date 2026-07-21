@@ -12,8 +12,11 @@ COPY check.js ./
 # and Discord webhook, and is mounted from the host at runtime instead.
 ENV CONFIG_PATH=/config/config.json \
     STATE_PATH=/state/state.json \
-    INTERVAL_MINUTES=360
+    INTERVAL_MINUTES=360 \
+    PORT=8080
 
 # Runs as root so it can always write to the CasaOS-created /DATA/AppData dirs.
-# It exposes no ports and only makes outbound HTTPS requests.
+# Serves a read-only status dashboard on PORT; makes outbound HTTPS requests.
+EXPOSE 8080
+
 CMD ["node", "check.js"]

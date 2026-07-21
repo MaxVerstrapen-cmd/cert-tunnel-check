@@ -30,6 +30,17 @@ To confirm the debounce works, run `--once` twice — the second run should say
 | `STATE_PATH` | `./state.json` | Where to persist previous results |
 | `INTERVAL_MINUTES` | `360` | Minutes between runs in loop mode |
 | `RUN_ONCE` | unset | Set to `true` for a single run (same as `--once`) |
+| `PORT` | `8080` | Status dashboard port (loop mode only — `--once` doesn't start it) |
+
+## Status dashboard
+
+In loop mode, `check.js` also serves a read-only status page at `http://<host>:8080/`
+showing the most recent cert expiry, HTTP reachability, and tunnel status per
+host, color-coded by threshold. Auto-refreshes every 30 seconds. Raw JSON is
+available at `/api/state` if you want to script against it.
+
+The page reflects whatever `state.json` last held, so it survives restarts —
+on startup it loads the previous run before the next check completes.
 
 ## Deploying to CasaOS
 
@@ -38,14 +49,16 @@ To confirm the debounce works, run `--once` twice — the second run should say
 The repo builds and pushes to GHCR when you push a version tag:
 
 ```bash
-git tag v1.0
-git push origin v1.0
+git tag v1.1
+git push origin v1.1
 ```
 
-That produces `ghcr.io/<your-username>/cert-tunnel-check:v1.0` for amd64 and
-arm64. Make the package public once (GitHub → Packages → cert-tunnel-check →
-Package settings → Change visibility → Public), or CasaOS won't be able to pull
-it without registry credentials.
+That produces `ghcr.io/<your-username>/cert-tunnel-check:v1.1` for amd64 and
+arm64. The package's visibility must be set to Public directly (Package
+settings → **uncheck** "Inherit access from source repository" → Danger Zone →
+Change package visibility → Public) — with a private source repo, inherited
+access keeps the image private regardless of the visibility toggle, and
+CasaOS will get `unauthorized` trying to pull it.
 
 ### 2. Seed config on the CasaOS host
 
@@ -69,8 +82,9 @@ visibly stops.
 CasaOS → **+** → **Custom Install** → **Import** (the `⋯` menu) → paste the
 contents of `docker-compose.yml`.
 
-It's a headless app — no web UI. Verify it's working from the container logs;
-you should see a `=== cert-tunnel-check run @ ... ===` block.
+Verify it's working from the container logs — you should see a
+`=== cert-tunnel-check run @ ... ===` block — then open
+`http://<casaos-host>:8080/` for the status dashboard.
 
 ### 4. Updating
 
